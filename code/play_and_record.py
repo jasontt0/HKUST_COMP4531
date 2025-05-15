@@ -5,6 +5,40 @@ import threading
 import matplotlib.pyplot as plt
 import argparse
 import soundfile as sf
+import random
+
+import paho.mqtt.client as mqtt_client
+
+broker = '127.0.0.1'
+port = 1883
+# topic = "/test"
+client_id = f'python-mqtt-{random.randint(0, 1000)}'
+
+def connect_mqtt():
+    def on_connect(client, userdata, flags, rc):
+        if rc == 0:
+            print("Connected to MQTT Broker!")
+        else:
+            print("Failed to connect, return code %d\n", rc)
+
+    client = mqtt_client.Client(client_id)
+    # client.username_pw_set(username, password)
+    client.on_connect = on_connect
+    client.connect(broker, port)
+    return client
+
+
+def publish(client, topic, msg):
+    result = client.publish(topic, msg)
+    # result: [0, 1]
+    status = result[0]
+    if status == 0:
+        print(f"Send `{msg}` to topic `{topic}`")
+    else:
+        print(f"Failed to send message to topic {topic}")
+
+client = connect_mqtt()
+client.loop_start()
 
 recording = None
 accu_frames = 0  # Initialize a counter for accumulated frames
@@ -284,34 +318,79 @@ def detect_pattern_and_output(amplitudes, threshold=0.5):
     # 计算差分（导数）来检测增大和减小
     diff = np.diff(amplitudes)
     
+    diff = smooth_amplitude(amplitudes=diff, window_size=30)
+    
+    Direction = np.where(diff > 0, 1, 0)
+    
     plt.figure(figsize=(10, 6))
-    plt.plot(diff, label='Smoothed Amplitude Diff')
-    plt.title('Smoothed Amplitude Diff per Window')
+    plt.plot(diff, label='Amplitude Diff')
+    plt.title('Amplitude Diff per Window')
     plt.xlabel('Window Index')
-    plt.ylabel('Smoothed Amplitude Diff')
+    plt.ylabel('Amplitude Diff')
     plt.grid()
-    plt.savefig('DiffSmoothedAmplitude.png')
+    plt.savefig('DiffAmplitude.png')
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(Direction, label='Direction')
+    plt.title('Direction')
+    plt.xlabel('Window Index')
+    plt.ylabel('Direction')
+    plt.grid()
+    plt.savefig('Direction.png')
     
     plt.close()
     
-    # 定义状态：先增大后减小
-    increasing = False
-    peak_detected = False
-    for i in range(1, len(diff)):
-        # 检查增大趋势（差分 > threshold）
-        if not increasing and diff[i-1] < 0 and diff[i] > threshold:
-            increasing = True
-        
-        # 检查是否出现峰值（先增大后减小）
-        if increasing and diff[i] < -threshold:
-            peak_detected = True
-            break
+    # 假设 Direction 是你的数组
 
-    # 如果符合“先增大后减小”的模式，则输出 10
-    if peak_detected:
-         print(10)
+    # 设置阈值，例如连续出现 3 次才记录
+    threshold = 3
+    result = []
+    count = 1
+    prev_value = Direction[29]
+
+    # 遍历数组，统计连续值
+    for i in range(30, len(Direction)):
+        if Direction[i] == prev_value:
+            count += 1
+        else:
+            if count >= threshold:
+                result.append(prev_value)
+            count = 1
+            prev_value = Direction[i]
+
+    # 检查最后一个序列
+    if count >= threshold:
+        result.append(prev_value)
+
+    print("binary result:",result)
+    
+    # 将二进制序列转换为十进制，index=0 为 LSB
+    decimal_result = 0
+    for i in range(len(result)):
+        decimal_result += result[i] * (2 ** i)
+
+    print("decimal result", decimal_result)
+    
+    gesture_command = ""
+    
+    # 使用 if-elif 语句处理 decimal_result
+    if decimal_result == 0:
+        gesture_command = "Desk Low"
+    elif decimal_result == 1:
+        gesture_command = "Desk High"
+    elif decimal_result == 2:
+        gesture_command = "Turn-off the Light"
+    elif decimal_result == 5:
+        gesture_command = "Turn-on the Light"
+    elif decimal_result == 10:
+        gesture_command = "Turn-off the Air Conditioner"
+    elif decimal_result == 21:
+        gesture_command = "Turn-on the Air Conditioner"
     else:
-        print("None")
+        gesture_command = "Unrecognized gesture, no command taken"
+        
+    print(gesture_command)
+    publish(client, "/har/gesture", gesture_command)
 
         
 
